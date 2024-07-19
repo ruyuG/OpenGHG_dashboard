@@ -17,9 +17,16 @@ def overview():
 def main():
     overview()
     search_time_series_slider_mul()
+    display_table()
     plot_data()
 
-
+def handle_parameters():
+    network = None if st.session_state['network'] == "" else st.session_state['network']
+    sites = None if not st.session_state['site'] else st.session_state['site']
+    species = None if not st.session_state['species'] else st.session_state['species']
+    inlets = None if not st.session_state['inlet'] else st.session_state['inlet']
+    instruments = None if not st.session_state['instrument'] else st.session_state['instrument']
+    return sites, species, inlets, network, instruments
 
 
 class ObsData:
@@ -45,15 +52,6 @@ def prepare_and_plot_data(datasets, date_range):
     fig = plot_timeseries(obs_data_list, xvar='time') 
     return fig
 
-def prepare_and_plot_data(datasets, date_range):
-    filtered_datasets = [ds.sel(time=slice(*date_range)) for ds in datasets]
-    obs_data_list = [wrap_dataset_with_metadata(ds, {
-        "species": ds.attrs.get('species', 'Unknown'),
-        "site": ds.attrs.get('site', 'Unknown'),
-        "inlet": ds.attrs.get('inlet', 'Unknown')
-    }) for ds in filtered_datasets]
-    fig = plot_timeseries(obs_data_list, xvar='time')
-    return fig
 
 
 
@@ -107,7 +105,7 @@ def search_time_series():
     network = None if st.session_state['network'] == "" else st.session_state['network']
     sites = None if not st.session_state['site'] else st.session_state['site']
     species = None if not st.session_state['species'] else st.session_state['species']
-    inlets = None if not st.session_state['inlet'] else st.session_state['inlet']
+    inlets = None if not st.session_state['i    '] else st.session_state['inlet']
 
     if st.button("Search Data"):
         results = search_surface(site=sites, species=species, inlet=inlets, network=network)
@@ -228,6 +226,8 @@ def search_time_series_slider_mul():
             st.session_state['inlet'] = []
         if 'network' not in st.session_state:
             st.session_state['network'] = ""
+        if 'instrument' not in st.session_state:
+            st.session_state['instrument'] = ""
         if 'compound_group' not in st.session_state:
             st.session_state['compound_group'] = ""
 
@@ -287,7 +287,6 @@ def search_time_series_slider_mul():
             filtered_df = filtered_df[filtered_df['site'].isin(st.session_state['site'])]
         
         # Species selection (allows multiple selection)
-        #species = st.multiselect("Select species", options=list(filtered_df['species'].unique()), key="species_select")
         species = st.multiselect("Select species", options=list(species_options), key="species_select")
         st.session_state['species'] = species
 
@@ -298,25 +297,38 @@ def search_time_series_slider_mul():
         inlets = st.multiselect("Select inlet heights", options=list(filtered_df['inlet'].unique()), key="inlet_select")
         st.session_state['inlet'] = inlets
 
-        # Handle these parameters
-        network = None if st.session_state['network'] == "" else st.session_state['network']
-        sites = None if not st.session_state['site'] else st.session_state['site']
-        species = None if not st.session_state['species'] else st.session_state['species']
-        inlets = None if not st.session_state['inlet'] else st.session_state['inlet']
+        # Instrument selection (allows multiple selection)
+        instruments = st.multiselect("Select instrument", options=list(filtered_df['instrument'].unique()), key="instrument_select")
+        st.session_state['instrument'] = instruments
 
+        # Handle these parameters
+        sites, species, inlets, network, instruments = handle_parameters()
 
         if st.button("Search Data"):
-            results = search_surface(site=sites, species=species, inlet=inlets, network=network)
+            results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments)
             if hasattr(results, 'results') and not results.results.empty:
-                # pass the datasets to plot
-                st.session_state['data'] = results.retrieve_all()
+                #if isinstance(results.retrieve_all(), list):
+                #    st.session_state['data'] = results.retrieve_all()
+                # If it's not a list, there's only one dataset, put it in the list
+                #else:
+                #    st.session_state['data'] = [results.retrieve_all()]
+
                 # save the results for display the table
                 st.session_state['search_results'] = results.results
-                st.dataframe(results.results)
+                #st.dataframe(results.results)
             else:
                 st.warning("No results found.")
                 st.session_state['data'] = None
-def plot_data():
+def display_table():
+    """
+    Always display this table,When we trigger an action in Streamlit (like clicking a button), 
+    it causes the entire interface to re-run, which means that all non-static content is reset unless state information is explicitly saved.
+    """
+    with st.container():
+        if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+            st.dataframe(st.session_state['search_results'])
+
+def plot_data_bak():
     with st.container():
         if 'data' in st.session_state and st.session_state['data'] is not None:
 
@@ -338,7 +350,54 @@ def plot_data():
                     else:
                         st.error("Unable to generate the plot. Please check the selected options.")
 
+def plot_data():
+    with st.container():
+        if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+            min_dates = pd.to_datetime(st.session_state['search_results']['start_date'])
+            max_dates = pd.to_datetime(st.session_state['search_results']['end_date'])
 
+            if len(st.session_state['search_results']) > 1:
+                # select date range
+                date_range_option = st.radio("Select date range option", ["Intersection", "Union"], key="date_range_option")
+                if date_range_option == "Intersection":
+                    selected_min_date = max(min_dates)
+                    selected_max_date = min(max_dates)
+                else:  # Union
+                    selected_min_date = min(min_dates)
+                    selected_max_date = max(max_dates)
+            else:
+                # One dataset
+                selected_min_date = min_dates.iloc[0]
+                selected_max_date = max_dates.iloc[0]
+
+
+            # 
+            default_start = selected_min_date.to_pydatetime() if selected_min_date else datetime.datetime.now() - datetime.timedelta(days=365)
+            default_end = selected_max_date.to_pydatetime() if selected_max_date else datetime.datetime.now()
+
+            date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
+
+            if st.button("Plot All Data", key="plot_all_data"):
+                # Retrieve data based on updated date range
+                sites, species, inlets, network, instruments = handle_parameters()
+                results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments,
+                                         start_date=date_range[0].strftime('%Y-%m-%d'), end_date=date_range[1].strftime('%Y-%m-%d'))
+                
+                if hasattr(results, 'results') and not results.results.empty:
+                    updated_datasets = results.retrieve_all()
+
+                    # Depending on whether the datasets are a list or a single dataset
+                    if not isinstance(updated_datasets, list):
+                        updated_datasets = [updated_datasets]
+
+                    # plot data
+                    fig = plot_timeseries(updated_datasets, xvar='time')
+                    if fig:
+                        st.plotly_chart(fig)
+                    else:
+                        st.error("Unable to generate the plot. Please check the selected options.")
+                else:
+                    st.warning("No results found for the selected date range.")
 
 
 if __name__ == "__main__":
