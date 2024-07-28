@@ -1,6 +1,5 @@
 import streamlit as st
 from openghg.retrieve import search_surface
-from openghg.tutorial import use_tutorial_store
 from openghg.standardise import summary_source_formats
 from openghg.util import get_domain_info
 import pandas as pd
@@ -11,8 +10,17 @@ from openghg.retrieve import get_footprint, search_footprints, search, search_fl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
+import json
+import plotly.express as px
 
-#@st.cache_data(show_spinner=False)
+
+import logging
+from typing import List, Optional, Union, Dict, Tuple
+import base64
+from typing import TYPE_CHECKING
+from openghg.util import get_species_info, synonyms, get_datapath, load_internal_json
+from openghg.plotting._timeseries import _plot_legend_position, _plot_logo, _plot_remove_gaps, _latex2html
+@st.cache_data(show_spinner=False)
 def overview():
     st.title('Overview')
     #summary = summary_source_formats()
@@ -21,7 +29,7 @@ def overview():
 
 def main():
     st.title("OpenGHG Data Explorer")
-    
+    overview()
     # Initialize session state
     initialize_session_state()
     
@@ -62,7 +70,7 @@ def search_observation_data():
     with st.container():
         st.title("Observation Data Search")
 
-        # display the full list of species 
+        # display the full list
         summary = search_surface()
         summary_df = summary.results
 
@@ -168,8 +176,12 @@ def display_table():
         if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
             st.dataframe(st.session_state['observation_results'])
 
+def calculate_rolling_average(data, window=30):
+    return data.rolling(window=window, min_periods=1).mean()
+
 def plot_observation_data():
     with st.container():
+        show_rolling_average = st.checkbox("Show Rolling Average", value=False)
         if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
             min_dates = pd.to_datetime(st.session_state['observation_results']['start_date'])
             max_dates = pd.to_datetime(st.session_state['observation_results']['end_date'])
@@ -201,18 +213,94 @@ def plot_observation_data():
 
                     if not isinstance(updated_datasets, list):
                         updated_datasets = [updated_datasets]
+                             
+                if show_rolling_average:
+                    fig = go.Figure()
+                    species_info = get_species_info()
+                    attributes_data = load_internal_json("attributes.json")
+                    
+                    species_strings = []
+                    unit_strings = []
+                    for dataset in updated_datasets:
+                        metadata = dataset.metadata
+                        species_name = metadata["species"]
+                        site = metadata["site"]
+                        inlet = metadata["inlet"]
+                        
+                        species_string = _latex2html(species_info[synonyms(species_name, lower=False)]["print_string"])
+                        legend_text = f"Rolling Avg - {species_string} - {site.upper()} ({inlet})"
 
-                    fig = plot_timeseries(updated_datasets, xvar='time')
-                    if fig:
-                        st.session_state['observation_fig'] = fig
-                        st.plotly_chart(fig)
-                    else:
-                        st.error("Unable to generate the plot. Please check the selected options.")
+                        data_xr = dataset.data
+                        data_df = data_xr.to_dataframe().reset_index()
+                        
+                        x_data = data_df['time']
+                        y_data = data_df[species_name] #df
+                        
+                        #data_units = y_data.attrs.get("units", "1")
+                        data_units = data_xr[species_name].attrs.get("units", "1")
+                        unit_value = data_units
+                        unit_conversion = 1
+                        
+                        y_data *= unit_conversion
+                        rolling_data = calculate_rolling_average(y_data)
+
+                        unit_string = attributes_data["unit_print"][unit_value]
+                        unit_string_html = _latex2html(unit_string)
+
+                        x_data_plot, y_data_plot = _plot_remove_gaps(x_data.values, rolling_data.values)
+
+                        fig.add_trace(go.Scatter(
+                            name=legend_text,
+                            x=x_data_plot,
+                            y=y_data_plot,
+                            mode="lines",
+                            #line=dict(color='red', width=2),
+                            hovertemplate="%{x|%Y-%m-%d %H:%M}<br> %{y:.1f} " + unit_string_html,
+                        ))
+
+                        unit_strings.append(unit_string_html)
+                        species_strings.append(species_string)
+
+                    # Determine whether data is ascending or descending
+                    y_data_diff = y_data.diff().mean()
+                    ascending = y_data_diff >= 0
+
+                    # Update y-axis title
+                    ytitle = ", ".join(set(species_strings)) + " (" + unit_strings[0] + ")"
+                    fig.update_yaxes(title=ytitle)
+
+                    # Update x-axis title
+                    fig.update_xaxes(title="Date")
+
+                    # Position the legend
+                    legend_pos, logo_pos = _plot_legend_position(ascending)
+                    fig.update_layout(
+                        legend=legend_pos, 
+                        template="seaborn",
+                        title={
+                            "text": "Rolling Average of Observation Data",
+                            "y": 0.9,
+                            "x": 0.5,
+                            "xanchor": "center",
+                            "yanchor": "top"
+                        },
+                        font={"size": 14},
+                        margin={"l": 20, "r": 20, "t": 20, "b": 20}
+                    )
+
+                    # Add OpenGHG logo
+                    logo_dict = _plot_logo(logo_pos)
+                    fig.add_layout_image(logo_dict)
                 else:
-                    st.warning("No results found for the selected date range.")
+                    fig = plot_timeseries(updated_datasets, xvar='time')
+
+                st.session_state['observation_fig'] = fig
+                st.plotly_chart(fig)
+            else:
+                st.warning("No results found for the selected date range.")
         # Display stored observation figure if it exists
-        if 'observation_fig' in st.session_state and st.session_state['observation_fig'] is not None:
-            st.plotly_chart(st.session_state['observation_fig'])
+        #if 'observation_fig' in st.session_state and st.session_state['observation_fig'] is not None:
+        #    st.plotly_chart(st.session_state['observation_fig'])
 
 def search_footprint_data():
     st.header("Footprint Data Search")
