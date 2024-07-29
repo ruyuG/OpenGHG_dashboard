@@ -20,6 +20,7 @@ import base64
 from typing import TYPE_CHECKING
 from openghg.util import get_species_info, synonyms, get_datapath, load_internal_json
 from openghg.plotting._timeseries import _plot_legend_position, _plot_logo, _plot_remove_gaps, _latex2html
+from openghg.util._species import get_species_info
 @st.cache_data(show_spinner=False)
 def overview():
     st.title('Overview')
@@ -310,14 +311,31 @@ def search_footprint_data():
         return None
     
     footprint_data_results = search_footprints().results
+    species_data = get_species_info()  # 获取物种信息
+    
+    # species
+    observed_species = st.session_state['species']
+    search_species = []
+    for species in observed_species:
+        if species == "co2":
+            search_species.append(species)  #  CO2
+        elif "lifetime" in species_data.get(species, {}) or "lifetime_monthly" in species_data.get(species, {}):
+            search_species.append(species)  # # Non-inert gases with lifetime data
+        else:
+            search_species.append("inert")  # For other species，use inert as an alternative
+    
+    # 去重，避免重复搜索相同物种
+    search_species = list(set(search_species))
+    
+    footprint_data_results = search_footprints().results
     
     # Filter footprint data based on observation parameters
     filtered_data = footprint_data_results[
         (footprint_data_results['site'].isin(st.session_state['site'])) &
-        (footprint_data_results['species'].isin(st.session_state['species'])) &
+        (footprint_data_results['species'].isin(search_species)) &
         (footprint_data_results['inlet'].isin(st.session_state['inlet']) if st.session_state['inlet'] else True)
     ]
-    
+
     if filtered_data.empty:
         st.warning("No corresponding footprint data found for the selected observation parameters.")
         return None
