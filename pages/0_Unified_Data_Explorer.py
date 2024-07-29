@@ -204,6 +204,8 @@ def plot_observation_data():
 
             date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
 
+             # create an empty container 
+            plot_container = st.empty()
             if st.button("Plot Observation Data", key="plot_observation_data"):
                 sites, species, inlets, network, instruments = handle_parameters()
                 results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments,
@@ -296,12 +298,10 @@ def plot_observation_data():
                     fig = plot_timeseries(updated_datasets, xvar='time')
 
                 st.session_state['observation_fig'] = fig
-                st.plotly_chart(fig)
+                plot_container.plotly_chart(fig, use_container_width=True)
             else:
-                st.warning("No results found for the selected date range.")
-        # Display stored observation figure if it exists
-        #if 'observation_fig' in st.session_state and st.session_state['observation_fig'] is not None:
-        #    st.plotly_chart(st.session_state['observation_fig'])
+                if 'observation_fig' in st.session_state and st.session_state['observation_fig'] is not None:
+                    plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
 
 def search_footprint_data():
     st.header("Footprint Data Search")
@@ -311,7 +311,7 @@ def search_footprint_data():
         return None
     
     footprint_data_results = search_footprints().results
-    species_data = get_species_info()  # 获取物种信息
+    species_data = get_species_info()  # species info
     
     # species
     observed_species = st.session_state['species']
@@ -324,7 +324,7 @@ def search_footprint_data():
         else:
             search_species.append("inert")  # For other species，use inert as an alternative
     
-    # 去重，避免重复搜索相同物种
+    # Avoid repeated searches
     search_species = list(set(search_species))
     
     footprint_data_results = search_footprints().results
