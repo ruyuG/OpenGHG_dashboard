@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from openghg.util import get_species_info, synonyms, get_datapath, load_internal_json
 from openghg.plotting._timeseries import _plot_legend_position, _plot_logo, _plot_remove_gaps, _latex2html
 from openghg.util._species import get_species_info
+from scipy import stats
 @st.cache_data(show_spinner=False)
 def overview():
     st.title('Overview')
@@ -177,12 +178,129 @@ def display_table():
         if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
             st.dataframe(st.session_state['observation_results'])
 
-def calculate_rolling_average(data, window=30):
-    return data.rolling(window=window, min_periods=1).mean()
+def calculate_rolling_average(data, window=300):
+    st.write(f"Window size: {window}")
+    print("Sample before rolling average:", data.head())
+    result = data.rolling(window=window, min_periods=1).mean()
+    print("Sample after rolling average:", result.head())
+    return result
 
+def add_linear_regression(fig, datasets):
+    for dataset in datasets:
+        data_xr = dataset.data  
+        species_name = dataset.metadata["species"]
+        site = dataset.metadata["site"]
+        inlet = dataset.metadata["inlet"]
+        
+        data_df = data_xr.to_dataframe().reset_index()
+        x_data = data_df['time']
+        y_data = data_df[species_name]
+        
+        # Convert datetime to numeric values (seconds since start)
+        x_numeric = (x_data - x_data.min()).dt.total_seconds().values
+        
+        # Perform linear regression
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x_numeric, y_data)
+        line = slope * x_numeric + intercept
+        
+        # Adding regression line to the plot
+        fig.add_trace(go.Scatter(
+            x=x_data,
+            y=line,
+            mode='lines',
+            name=f'Linear Regression - {species_name} - {site.upper()} ({inlet})',
+            line=dict(color='red', dash='dash'),
+        ))
+        
+        # Updating plot title to include regression info
+        current_title = fig.layout.title.text if fig.layout.title else "Plot"
+        new_title = f"{current_title}<br>R-squared: {r_value**2:.4f}, Slope: {slope:.4e}"
+        fig.update_layout(title=new_title)
+
+    return fig
+
+def create_rolling_average_plot(updated_datasets):
+    fig = go.Figure()
+    species_info = get_species_info()
+    attributes_data = load_internal_json("attributes.json")
+    
+    species_strings = []
+    unit_strings = []
+    for dataset in updated_datasets:
+        metadata = dataset.metadata
+        species_name = metadata["species"]
+        site = metadata["site"]
+        inlet = metadata["inlet"]
+        
+        species_string = _latex2html(species_info[synonyms(species_name, lower=False)]["print_string"])
+        legend_text = f"Rolling Avg - {species_string} - {site.upper()} ({inlet})"
+
+        data_xr = dataset.data
+        data_df = data_xr.to_dataframe().reset_index()
+        
+        x_data = data_df['time']
+        y_data = data_df[species_name] #df
+        #data_units = y_data.attrs.get("units", "1")
+        data_units = data_xr[species_name].attrs.get("units", "1")
+        unit_value = data_units
+        unit_conversion = 1
+        
+        y_data *= unit_conversion
+        rolling_data = calculate_rolling_average(y_data)
+
+        unit_string = attributes_data["unit_print"][unit_value]
+        unit_string_html = _latex2html(unit_string)
+
+        x_data_plot, y_data_plot = _plot_remove_gaps(x_data.values, rolling_data.values)
+
+        fig.add_trace(go.Scatter(
+            name=legend_text,
+            x=x_data_plot,
+            y=y_data_plot,
+            mode="lines",
+            #line=dict(color='red', width=2),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br> %{y:.1f} " + unit_string_html,
+        ))
+
+        unit_strings.append(unit_string_html)
+        species_strings.append(species_string)
+
+    # Determine whether data is ascending or descending
+    y_data_diff = y_data.diff().mean()
+    ascending = y_data_diff >= 0
+
+    # Update y-axis title
+    ytitle = ", ".join(set(species_strings)) + " (" + unit_strings[0] + ")"
+    fig.update_yaxes(title=ytitle)
+
+    # Update x-axis title
+    fig.update_xaxes(title="Date")
+
+    # Position the legend
+    legend_pos, logo_pos = _plot_legend_position(ascending)
+    fig.update_layout(
+        legend=legend_pos, 
+        template="seaborn",
+        title={
+            "text": "Rolling Average of Observation Data",
+            "y": 0.9,
+            "x": 0.5,
+            "xanchor": "center",
+            "yanchor": "top"
+        },
+        font={"size": 14},
+        margin={"l": 20, "r": 20, "t": 20, "b": 20}
+    )
+
+    # Add OpenGHG logo
+    logo_dict = _plot_logo(logo_pos)
+    fig.add_layout_image(logo_dict)
+
+    return fig
 def plot_observation_data():
     with st.container():
         show_rolling_average = st.checkbox("Show Rolling Average", value=False)
+        show_linear_regression = st.checkbox("Show Linear Regression", value=False)
         if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
             min_dates = pd.to_datetime(st.session_state['observation_results']['start_date'])
             max_dates = pd.to_datetime(st.session_state['observation_results']['end_date'])
@@ -204,7 +322,59 @@ def plot_observation_data():
 
             date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
 
-             # create an empty container 
+            # create an empty container 
+            plot_container = st.empty()
+            if st.button("Plot Observation Data", key="plot_observation_data"):
+                sites, species, inlets, network, instruments = handle_parameters()
+                results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments,
+                                         start_date=date_range[0].strftime('%Y-%m-%d'), end_date=date_range[1].strftime('%Y-%m-%d'))
+                if not hasattr(results, 'results') or results.results.empty:
+                    st.warning("No results found or empty results.")
+                    return
+
+                updated_datasets = results.retrieve_all()
+                if not isinstance(updated_datasets, list):
+                        updated_datasets = [updated_datasets]                
+
+                if show_rolling_average:
+                    fig = create_rolling_average_plot(updated_datasets)
+                else:
+                    fig = plot_timeseries(updated_datasets, xvar='time')
+                if show_linear_regression and isinstance(fig, go.Figure):
+                    fig = add_linear_regression(fig, updated_datasets)
+                if isinstance(fig, go.Figure):
+                    st.session_state['observation_fig'] = fig
+                    plot_container.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Unable to create a valid plot. Please check your data.")
+            elif 'observation_fig' in st.session_state and isinstance(st.session_state['observation_fig'], go.Figure):
+                plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
+def plot_observation_data_back():
+    with st.container():
+        show_rolling_average = st.checkbox("Show Rolling Average", value=False)
+        show_linear_regression = st.checkbox("Show Linear Regression", value=False)
+        if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
+            min_dates = pd.to_datetime(st.session_state['observation_results']['start_date'])
+            max_dates = pd.to_datetime(st.session_state['observation_results']['end_date'])
+
+            if len(st.session_state['observation_results']) > 1:
+                date_range_option = st.radio("Select date range option", ["Intersection", "Union"], key="date_range_option")
+                if date_range_option == "Intersection":
+                    selected_min_date = max(min_dates)
+                    selected_max_date = min(max_dates)
+                else:
+                    selected_min_date = min(min_dates)
+                    selected_max_date = max(max_dates)
+            else:
+                selected_min_date = min_dates.iloc[0]
+                selected_max_date = max_dates.iloc[0]
+
+            default_start = selected_min_date.to_pydatetime() if selected_min_date else pd.Timestamp.now() - pd.Timedelta(days=365)
+            default_end = selected_max_date.to_pydatetime() if selected_max_date else pd.Timestamp.now()
+
+            date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
+
+            # create an empty container 
             plot_container = st.empty()
             if st.button("Plot Observation Data", key="plot_observation_data"):
                 sites, species, inlets, network, instruments = handle_parameters()
@@ -296,12 +466,19 @@ def plot_observation_data():
                     fig.add_layout_image(logo_dict)
                 else:
                     fig = plot_timeseries(updated_datasets, xvar='time')
-
+                if show_linear_regression and isinstance(fig, go.Figure):
+                    fig = add_linear_regression(fig, updated_datasets)
+                if isinstance(fig, go.Figure):
+                    st.session_state['observation_fig'] = fig
+                    plot_container.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Unable to create a valid plot. Please check your data.")
+                """
                 st.session_state['observation_fig'] = fig
                 plot_container.plotly_chart(fig, use_container_width=True)
-            else:
-                if 'observation_fig' in st.session_state and st.session_state['observation_fig'] is not None:
-                    plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
+                """
+            elif 'observation_fig' in st.session_state and isinstance(st.session_state['observation_fig'], go.Figure):
+                plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
 
 def search_footprint_data():
     st.header("Footprint Data Search")
