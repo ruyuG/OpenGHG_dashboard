@@ -51,7 +51,7 @@ ssh -tt $USERNAME@$SERVER bash << EOF
     pip install --upgrade pip || { echo "Failed to upgrade pip"; exit 1; }
 
     # Clone or update GitHub repository
-    REPO_NAME="climate_dashboard_bak"
+    REPO_NAME="openghg_interface"
 
     if [ ! -d "\$REPO_NAME" ]; then
         echo "Cloning the GitHub repository..."
@@ -67,8 +67,35 @@ ssh -tt $USERNAME@$SERVER bash << EOF
     pip install -r \$REPO_NAME/requirements.txt || { echo "Failed to install dependencies"; exit 1; }
 
     echo "Configuring openghg..."
-    openghg --quickstart
-
+    expect -c '
+        set timeout 30
+        spawn python
+        expect ">>>"
+        send "from openghg.util import create_config\r"
+        send "create_config(silent=False)\r"
+        expect "Would you like to update the path? (y/n):"
+        send "n\r"
+        set store_names [list "obs_store1" "spital_store2"]
+        set store_paths [list "/group/chemistry/acrg/object_stores/paris/obs_nir_2024_01_25_store_zarr" "/group/chemistry/acrg/object_stores/updated/shared_store_zarr"]
+        set store_permissions [list "r" "r"] 
+        set store_count [llength \$store_names]
+        for {set i 0} {\$i < \$store_count} {incr i} {
+            expect "Would you like to add another object store? (y/n):"
+            send "y\r"
+            expect "Enter the name of the store:"
+            send "[lindex \$store_names \$i]\r"
+            expect "Enter the object store path:"
+            send "[lindex \$store_paths \$i]\r"
+            expect "Enter object store permissions:"
+            send "[lindex \$store_permissions \$i]\r"
+        }
+        expect "Would you like to add another object store? (y/n):"
+        send "n\r"
+        expect "Configuration written"
+        send "exit()\r"
+        expect eof
+    '
+    
     echo "Environment setup complete."
     
     # Start an interactive shell to keep the connection open
