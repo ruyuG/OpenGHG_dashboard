@@ -7,6 +7,12 @@ import pandas as pd
 from openghg.plotting import plot_timeseries
 from pandas import to_datetime
 import xarray as xr
+import plotly.graph_objects as go
+# rolling average plot 
+from openghg.util import get_species_info, synonyms, get_datapath, load_internal_json
+from openghg.plotting._timeseries import _plot_legend_position, _plot_logo, _plot_remove_gaps, _latex2html
+from openghg.util._species import get_species_info
+from scipy import stats
 #@st.cache_data(show_spinner=False)
 def overview():
     st.title('Overview')
@@ -27,186 +33,6 @@ def handle_parameters():
     inlets = None if not st.session_state['inlet'] else st.session_state['inlet']
     instruments = None if not st.session_state['instrument'] else st.session_state['instrument']
     return sites, species, inlets, network, instruments
-
-
-class ObsData:
-    def __init__(self, data, metadata):
-        self.data = data
-        self.metadata = metadata
-
-def wrap_dataset_with_metadata(dataset, metadata):
-    return ObsData(data=dataset, metadata=metadata)
-
-
-def prepare_and_plot_data(datasets, date_range):
-    obs_data_list = []
-    for dataset in datasets:
-        metadata = {
-            "species": dataset.attrs.get('species', 'Unknown'),
-            "site": dataset.attrs.get('site', 'Unknown'),
-            "inlet": dataset.attrs.get('inlet', 'Unknown')
-        }
-        filtered_dataset = dataset.sel(time=slice(*date_range))
-        obs_data = wrap_dataset_with_metadata(filtered_dataset, metadata)
-        obs_data_list.append(obs_data)
-    fig = plot_timeseries(obs_data_list, xvar='time') 
-    return fig
-
-
-
-
-def search_time_series():
-    st.title("OpenGHG Observation Data")
-
-    # Retrieve the full list of species 
-    summary = search_surface()
-    summary_df = summary.results
-
-    # Initialize session state for user selections
-    if 'site' not in st.session_state:
-        st.session_state['site'] = []
-    if 'species' not in st.session_state:
-        st.session_state['species'] = []
-    if 'inlet' not in st.session_state:
-        st.session_state['inlet'] = []
-    if 'network' not in st.session_state:
-        st.session_state['network'] = ""
-
-    # Network selection
-    network = st.selectbox("Select network", options=[""] + list(summary_df['network'].unique()), key="network_select")
-    st.session_state['network'] = network
-
-    # Filter based on network selection
-    filtered_df = summary_df
-    if st.session_state['network']:
-        filtered_df = filtered_df[filtered_df['network'] == st.session_state['network']]
-
-    # Site selection (allows multiple selection)
-    sites = st.multiselect("Select site codes", options=list(filtered_df['site'].unique()), key="site_select")
-    st.session_state['site'] = sites
-
-    if st.session_state['site']:
-        filtered_df = filtered_df[filtered_df['site'].isin(st.session_state['site'])]
-    
-    # Species selection (allows multiple selection)
-    species = st.multiselect("Select species", options=list(filtered_df['species'].unique()), key="species_select")
-    st.session_state['species'] = species
-
-    if st.session_state['species']:
-        filtered_df = filtered_df[filtered_df['species'].isin(st.session_state['species'])]
-
-    # Inlet selection (allows multiple selection)
-    inlets = st.multiselect("Select inlet heights", options=list(filtered_df['inlet'].unique()), key="inlet_select")
-    st.session_state['inlet'] = inlets
-
-    # Add instruments here
-
-    # Handle these parameters
-    network = None if st.session_state['network'] == "" else st.session_state['network']
-    sites = None if not st.session_state['site'] else st.session_state['site']
-    species = None if not st.session_state['species'] else st.session_state['species']
-    inlets = None if not st.session_state['i    '] else st.session_state['inlet']
-
-    if st.button("Search Data"):
-        results = search_surface(site=sites, species=species, inlet=inlets, network=network)
-        if hasattr(results, 'results') and not results.results.empty:
-            st.session_state['data'] = results.retrieve_all()  
-            st.dataframe(results.results)
-        else:
-            st.warning("No results found.")
-            st.session_state['data'] = None
-
-    if st.button("Retrieve and Plot Data"):
-        if 'results' in st.session_state and not st.session_state['results'].results.empty:
-            results = st.session_state['results']
-            # Retrieve data
-            data = results.retrieve_all()  
-            print(data)
-            # Plot the data
-            if data:
-                plot_species = ", ".join(st.session_state['species'])  # Adjust for multiple species
-                plot_sites = ", ".join(st.session_state['site'])  # Adjust for multiple sites
-                st.write(f"Plotting data for {plot_species} at {plot_sites}, inlets {'all' if not inlets else ', '.join(inlets)}")
-                fig = plot_timeseries(data)
-                st.plotly_chart(fig)
-            else:
-                st.warning("No data available for plotting.")
-        else:
-            st.error("No search has been performed or no results are available.")
-
-
-def search_time_series_slider_single():
-    st.title("OpenGHG Observation Data")
-
-    # Retrieve the full list of species 
-    summary = search_surface()
-    summary_df = summary.results
-
-    # Initialize session state for user selections
-    if 'site' not in st.session_state:
-        st.session_state['site'] = []
-    if 'species' not in st.session_state:
-        st.session_state['species'] = []
-    if 'inlet' not in st.session_state:
-        st.session_state['inlet'] = []
-    if 'network' not in st.session_state:
-        st.session_state['network'] = ""
-
-    # Network selection
-    network = st.selectbox("Select network", options=[""] + list(summary_df['network'].unique()), key="network_select")
-    st.session_state['network'] = network
-
-    # Filter based on network selection
-    filtered_df = summary_df
-    if st.session_state['network']:
-        filtered_df = filtered_df[filtered_df['network'] == st.session_state['network']]
-
-    # Site selection (allows multiple selection)
-    sites = st.multiselect("Select site codes", options=list(filtered_df['site'].unique()), key="site_select")
-    st.session_state['site'] = sites
-
-    if st.session_state['site']:
-        filtered_df = filtered_df[filtered_df['site'].isin(st.session_state['site'])]
-    
-    # Species selection (allows multiple selection)
-    species = st.multiselect("Select species", options=list(filtered_df['species'].unique()), key="species_select")
-    st.session_state['species'] = species
-
-    if st.session_state['species']:
-        filtered_df = filtered_df[filtered_df['species'].isin(st.session_state['species'])]
-
-    # Inlet selection (allows multiple selection)
-    inlets = st.multiselect("Select inlet heights", options=list(filtered_df['inlet'].unique()), key="inlet_select")
-    st.session_state['inlet'] = inlets
-
-    # Handle these parameters
-    network = None if st.session_state['network'] == "" else st.session_state['network']
-    sites = None if not st.session_state['site'] else st.session_state['site']
-    species = None if not st.session_state['species'] else st.session_state['species']
-    inlets = None if not st.session_state['inlet'] else st.session_state['inlet']
-
-    if st.button("Search Data"):
-        results = search_surface(site=sites, species=species, inlet=inlets, network=network)
-        if hasattr(results, 'results') and not results.results.empty:
-            st.session_state['data'] = results.retrieve_all()
-            st.dataframe(results.results)
-        else:
-            st.warning("No results found.")
-            st.session_state['data'] = None
-
-    if 'data' in st.session_state and st.session_state['data'] is not None:
-        dataset = st.session_state['data'].data
-        min_date = to_datetime(dataset.time.min().values).to_pydatetime()
-        max_date = to_datetime(dataset.time.max().values).to_pydatetime()
-        date_range = st.slider("Select date range", min_value=min_date, max_value=max_date, value=(min_date, max_date))
-
-        if st.button("Plot Data"):
-            fig = prepare_and_plot_data(dataset, date_range)
-            if fig:
-                st.plotly_chart(fig)
-            else:
-                st.error("Unable to generate the plot. Please check the selected options.")
-
 
 
 def search_time_series_slider_mul():
@@ -327,31 +153,126 @@ def display_table():
     with st.container():
         if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
             st.dataframe(st.session_state['search_results'])
+def calculate_rolling_average(data, window=300):
+    #st.write(f"Window size: {window}")
+    result = data.rolling(window=window, min_periods=1).mean()
+    return result
 
-def plot_data_bak():
-    with st.container():
-        if 'data' in st.session_state and st.session_state['data'] is not None:
+def add_linear_regression(fig, datasets):
+    for dataset in datasets:
+        data_xr = dataset.data  
+        species_name = dataset.metadata["species"]
+        site = dataset.metadata["site"]
+        inlet = dataset.metadata["inlet"]
+        
+        data_df = data_xr.to_dataframe().reset_index()
+        x_data = data_df['time']
+        y_data = data_df[species_name]
+        
+        # Convert datetime to numeric values (seconds since start)
+        x_numeric = (x_data - x_data.min()).dt.total_seconds().values
+        
+        # Perform linear regression
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x_numeric, y_data)
+        line = slope * x_numeric + intercept
+        
+        # Adding regression line to the plot
+        fig.add_trace(go.Scatter(
+            x=x_data,
+            y=line,
+            mode='lines',
+            name=f'Linear Regression - {species_name} - {site.upper()} ({inlet})',
+            line=dict(color='red', dash='dash'),
+        ))
+        
+        # Updating plot title to include regression info
+        current_title = fig.layout.title.text if fig.layout.title else "Plot"
+        new_title = f"{current_title}<br>R-squared: {r_value**2:.4f}, Slope: {slope:.4e}"
+        fig.update_layout(title=new_title)
 
-            datasets = [d.data for d in st.session_state['data']]  # allows a list of ObsData
-            if datasets:
-                # There are two cases of multiple datasets, one is different sites or species, to take the intersection. 
-                # The second is the existence of the same site,species,inlet, but with a time break(maybe measured by a different instrument)
-                # consider how to identify and take the union set.
-                min_date = min([to_datetime(ds.time.min().values).to_pydatetime() for ds in datasets])
-                max_date = max([to_datetime(ds.time.max().values).to_pydatetime() for ds in datasets])
-                date_range = st.slider("Select date range for all datasets", min_value=min_date, max_value=max_date, value=(min_date, max_date), key="date_range_all")
+    return fig
+def create_rolling_average_plot(updated_datasets):
+    fig = go.Figure()
+    species_info = get_species_info()
+    attributes_data = load_internal_json("attributes.json")
+    
+    species_strings = []
+    unit_strings = []
+    for dataset in updated_datasets:
+        metadata = dataset.metadata
+        species_name = metadata["species"]
+        site = metadata["site"]
+        inlet = metadata["inlet"]
+        
+        species_string = _latex2html(species_info[synonyms(species_name, lower=False)]["print_string"])
+        legend_text = f"Rolling Avg - {species_string} - {site.upper()} ({inlet})"
 
-                if st.button("Plot All Data", key="plot_all_data"):
-                    if 'search_results' in st.session_state:
-                        st.dataframe(st.session_state['search_results'])
-                    fig = prepare_and_plot_data(datasets, date_range)
-                    if fig:
-                        st.plotly_chart(fig)
-                    else:
-                        st.error("Unable to generate the plot. Please check the selected options.")
+        data_xr = dataset.data
+        data_df = data_xr.to_dataframe().reset_index()
+        
+        x_data = data_df['time']
+        y_data = data_df[species_name] #df
+        #data_units = y_data.attrs.get("units", "1")
+        data_units = data_xr[species_name].attrs.get("units", "1")
+        unit_value = data_units
+        unit_conversion = 1
+        
+        y_data *= unit_conversion
+        rolling_data = calculate_rolling_average(y_data)
 
+        unit_string = attributes_data["unit_print"][unit_value]
+        unit_string_html = _latex2html(unit_string)
+
+        x_data_plot, y_data_plot = _plot_remove_gaps(x_data.values, rolling_data.values)
+
+        fig.add_trace(go.Scatter(
+            name=legend_text,
+            x=x_data_plot,
+            y=y_data_plot,
+            mode="lines",
+            #line=dict(color='red', width=2),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br> %{y:.1f} " + unit_string_html,
+        ))
+
+        unit_strings.append(unit_string_html)
+        species_strings.append(species_string)
+
+    # Determine whether data is ascending or descending
+    y_data_diff = y_data.diff().mean()
+    ascending = y_data_diff >= 0
+
+    # Update y-axis title
+    ytitle = ", ".join(set(species_strings)) + " (" + unit_strings[0] + ")"
+    fig.update_yaxes(title=ytitle)
+
+    # Update x-axis title
+    fig.update_xaxes(title="Date")
+
+    # Position the legend
+    legend_pos, logo_pos = _plot_legend_position(ascending)
+    fig.update_layout(
+        legend=legend_pos, 
+        template="seaborn",
+        title={
+            "text": "Rolling Average of Observation Data",
+            "y": 0.9,
+            "x": 0.5,
+            "xanchor": "center",
+            "yanchor": "top"
+        },
+        font={"size": 14},
+        margin={"l": 20, "r": 20, "t": 20, "b": 20}
+    )
+
+    # Add OpenGHG logo
+    logo_dict = _plot_logo(logo_pos)
+    fig.add_layout_image(logo_dict)
+
+    return fig
 def plot_data():
     with st.container():
+        show_rolling_average = st.checkbox("Show Rolling Average", value=False)
+        show_linear_regression = st.checkbox("Show Linear Regression", value=False)
         if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
             min_dates = pd.to_datetime(st.session_state['search_results']['start_date'])
             max_dates = pd.to_datetime(st.session_state['search_results']['end_date'])
@@ -376,7 +297,8 @@ def plot_data():
             default_end = selected_max_date.to_pydatetime() if selected_max_date else datetime.datetime.now()
 
             date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
-
+            # create an empty container, for display plot
+            plot_container = st.empty()
             if st.button("Plot All Data", key="plot_all_data"):
                 # Retrieve data based on updated date range
                 sites, species, inlets, network, instruments = handle_parameters()
@@ -390,14 +312,19 @@ def plot_data():
                     if not isinstance(updated_datasets, list):
                         updated_datasets = [updated_datasets]
 
-                    # plot data
-                    fig = plot_timeseries(updated_datasets, xvar='time')
-                    if fig:
-                        st.plotly_chart(fig)
-                    else:
-                        st.error("Unable to generate the plot. Please check the selected options.")
+                if show_rolling_average:
+                    fig = create_rolling_average_plot(updated_datasets)
                 else:
-                    st.warning("No results found for the selected date range.")
+                    fig = plot_timeseries(updated_datasets, xvar='time')
+                if show_linear_regression and isinstance(fig, go.Figure):
+                    fig = add_linear_regression(fig, updated_datasets)
+                if isinstance(fig, go.Figure):
+                    st.session_state['observation_fig'] = fig
+                    plot_container.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Unable to create a valid plot. Please check your data.")
+            elif 'observation_fig' in st.session_state and isinstance(st.session_state['observation_fig'], go.Figure):
+                plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
 
 
 if __name__ == "__main__":
