@@ -153,10 +153,29 @@ def display_table():
     with st.container():
         if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
             st.dataframe(st.session_state['search_results'])
-def calculate_rolling_average(data, window=300):
-    #st.write(f"Window size: {window}")
-    result = data.rolling(window=window, min_periods=1).mean()
-    return result
+def calculate_rolling_average(data, resampling=None, window=30):
+    """
+    This function handles both rolling average and resampling for a DataFrame.
+    It expects a DataFrame with a datetime index and a data column.
+    
+    Args:
+    data (pd.DataFrame): DataFrame with datetime index and at least one data column.
+    resampling (str, optional): Frequency for resampling (e.g., 'M' for monthly, 'Y' for yearly).
+    window (int, optional): Window size for rolling average.
+    
+    Returns:
+    pd.DataFrame: DataFrame with processed data, maintaining the datetime index.
+    """
+    if resampling:
+        # use resample
+        st.write(f"Resampling frequency: {resampling}")
+        processed_df = data.resample(resampling).mean()
+        print("Sample after resampling:", processed_df.head())
+        return processed_df 
+    else:
+        #st.write(f"Window size: {window}")
+        rolling_avg_data = data.rolling(window=window, min_periods=1).mean()
+    return rolling_avg_data
 
 def add_linear_regression(fig, datasets):
     for dataset in datasets:
@@ -191,7 +210,8 @@ def add_linear_regression(fig, datasets):
         fig.update_layout(title=new_title)
 
     return fig
-def create_rolling_average_plot(updated_datasets):
+
+def create_smooth_plot(updated_datasets,smoothing_type):
     fig = go.Figure()
     species_info = get_species_info()
     attributes_data = load_internal_json("attributes.json")
@@ -205,7 +225,7 @@ def create_rolling_average_plot(updated_datasets):
         inlet = metadata["inlet"]
         
         species_string = _latex2html(species_info[synonyms(species_name, lower=False)]["print_string"])
-        legend_text = f"Rolling Avg - {species_string} - {site.upper()} ({inlet})"
+        legend_text = f"{smoothing_type} - {species_string} - {site.upper()} ({inlet})"
 
         data_xr = dataset.data
         data_df = data_xr.to_dataframe().reset_index()
@@ -216,14 +236,22 @@ def create_rolling_average_plot(updated_datasets):
         data_units = data_xr[species_name].attrs.get("units", "1")
         unit_value = data_units
         unit_conversion = 1
-        
         y_data *= unit_conversion
-        rolling_data = calculate_rolling_average(y_data)
+        # Handle resampling or rolling average
+        if st.session_state['resampling']:
+            y_data.index = pd.to_datetime(x_data)
+            processed_df = y_data.resample(st.session_state['resampling']).mean()
+            print("Sample after resampling:", processed_df.head())
+            x_data_plot = processed_df.index
+            y_data_plot = processed_df.values
+        else:
+            processed_df = y_data.rolling(window=300, min_periods=1).mean()
+            x_data_plot, y_data_plot = _plot_remove_gaps(x_data, processed_df.values)
+        #processed_data = calculate_rolling_average(y_data, window=300, resampling=st.session_state['resampling'])
 
         unit_string = attributes_data["unit_print"][unit_value]
         unit_string_html = _latex2html(unit_string)
-
-        x_data_plot, y_data_plot = _plot_remove_gaps(x_data.values, rolling_data.values)
+        # Retrieve the processed data for plotting
 
         fig.add_trace(go.Scatter(
             name=legend_text,
@@ -254,7 +282,7 @@ def create_rolling_average_plot(updated_datasets):
         legend=legend_pos, 
         template="seaborn",
         title={
-            "text": "Rolling Average of Observation Data",
+            "text": f"{smoothing_type} of Observation Data",
             "y": 0.9,
             "x": 0.5,
             "xanchor": "center",
@@ -271,7 +299,13 @@ def create_rolling_average_plot(updated_datasets):
     return fig
 def plot_data():
     with st.container():
-        show_rolling_average = st.checkbox("Show Rolling Average", value=False)
+        # Define the smoothing options
+        smoothing_options = {"None": None, "Rolling Average": "rolling", "Resample Monthly": "1M", "Resample Yearly": "1Y"}
+        smoothing_type = st.radio("Choose Data Smoothing Method:", list(smoothing_options.keys()), index=0)
+        if smoothing_type.startswith("Resample"):
+            st.session_state['resampling'] = smoothing_options[smoothing_type]
+
+        # 
         show_linear_regression = st.checkbox("Show Linear Regression", value=False)
         if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
             min_dates = pd.to_datetime(st.session_state['search_results']['start_date'])
@@ -290,7 +324,6 @@ def plot_data():
                 # One dataset
                 selected_min_date = min_dates.iloc[0]
                 selected_max_date = max_dates.iloc[0]
-
 
             # 
             default_start = selected_min_date.to_pydatetime() if selected_min_date else datetime.datetime.now() - datetime.timedelta(days=365)
@@ -311,11 +344,11 @@ def plot_data():
                     # Depending on whether the datasets are a list or a single dataset
                     if not isinstance(updated_datasets, list):
                         updated_datasets = [updated_datasets]
-
-                if show_rolling_average:
-                    fig = create_rolling_average_plot(updated_datasets)
-                else:
+                #fig = create_smooth_plot(updated_datasets, smoothing_type if smoothing_type.startswith('Resample') else "Rolling Average")
+                if smoothing_type == "None":
                     fig = plot_timeseries(updated_datasets, xvar='time')
+                else:
+                    fig = create_smooth_plot(updated_datasets, smoothing_type)
                 if show_linear_regression and isinstance(fig, go.Figure):
                     fig = add_linear_regression(fig, updated_datasets)
                 if isinstance(fig, go.Figure):
