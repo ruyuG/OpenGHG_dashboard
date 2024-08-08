@@ -25,6 +25,11 @@ def main():
     search_time_series_slider_mul()
     display_table()
     plot_data()
+    with st.expander("Advanced Options"):  # Create an expandable section
+        convert_scale = st.checkbox("Scale Conversion")
+        if convert_scale:  # Show conversions only if the user has ticked this option
+            scale_conversion_section()
+
 
 def handle_parameters():
     network = None if st.session_state['network'] == "" else st.session_state['network']
@@ -244,8 +249,8 @@ def create_smooth_plot(updated_datasets,smoothing_type):
             print("Sample after resampling:", processed_df.head())
             x_data_plot = processed_df.index
             y_data_plot = processed_df.values
-        else:
-            processed_df = y_data.rolling(window=300, min_periods=1).mean()
+        if smoothing_type == "Rolling Average":
+            processed_df = y_data.rolling(window=30, min_periods=1).mean()
             x_data_plot, y_data_plot = _plot_remove_gaps(x_data, processed_df.values)
         #processed_data = calculate_rolling_average(y_data, window=300, resampling=st.session_state['resampling'])
 
@@ -282,8 +287,8 @@ def create_smooth_plot(updated_datasets,smoothing_type):
         legend=legend_pos, 
         template="seaborn",
         title={
-            "text": f"{smoothing_type} of Observation Data",
-            "y": 0.9,
+            "text": f"{smoothing_type} of Observation",
+            "y": 1,
             "x": 0.5,
             "xanchor": "center",
             "yanchor": "top"
@@ -302,6 +307,7 @@ def plot_data():
         # Define the smoothing options
         smoothing_options = {"None": None, "Rolling Average": "rolling", "Resample Monthly": "1M", "Resample Yearly": "1Y"}
         smoothing_type = st.radio("Choose Data Smoothing Method:", list(smoothing_options.keys()), index=0)
+        print(f"smoothing_type is ====={smoothing_type}")
         if smoothing_type.startswith("Resample"):
             st.session_state['resampling'] = smoothing_options[smoothing_type]
 
@@ -335,6 +341,7 @@ def plot_data():
             if st.button("Plot All Data", key="plot_all_data"):
                 # Retrieve data based on updated date range
                 sites, species, inlets, network, instruments = handle_parameters()
+                print(f'======{species}=====')
                 results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments,
                                          start_date=date_range[0].strftime('%Y-%m-%d'), end_date=date_range[1].strftime('%Y-%m-%d'))
                 
@@ -358,7 +365,87 @@ def plot_data():
                     st.warning("Unable to create a valid plot. Please check your data.")
             elif 'observation_fig' in st.session_state and isinstance(st.session_state['observation_fig'], go.Figure):
                 plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
+import pandas as pd
+import importlib.resources as pkg_resources
+import openghg_calscales
 
+def load_conversion_scales():
+    # Load the CSV data
+
+    file_path = pkg_resources.files(openghg_calscales).joinpath('data/convert_functions.csv')
+    data = pd.read_csv(file_path, comment='#')
+    # Extract unique scales from 'scale_x' and 'scale_y' columns
+    scale_x = data['scale_x'].str.split('|').explode().unique()
+    scale_y = data['scale_y'].str.split('|').explode().unique()
+    all_scales = set(scale_x) | set(scale_y)  # Create a union of both sets
+    return list(all_scales)
+
+
+from openghg_calscales import convert
+from copy import deepcopy
+def scale_conversion_section():
+    st.subheader("Calibration Scale Conversion")
+    all_scales = load_conversion_scales()  # Load scale options
+    if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
+        original_scale = st.session_state['search_results']['calibration_scale'].iloc[0]   
+        st.write(f"Original calibration scale: {original_scale}")
+    else:
+        st.warning("No search results available. Please perform a search first.")
+    #original_scale = st.selectbox("Select original calibration scale", options=all_scales, key="original_scale")
+    target_scale = st.selectbox("Select target calibration scale", options=all_scales, key="target_scale")
+
+    if st.button("Convert Scale"):
+        try:
+            sites, species, inlets, network, instruments = handle_parameters()
+            results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments)
+            ori_dataset = results.retrieve_all()  # Placeholder for actual data retrieval
+            original_scale_data = deepcopy(ori_dataset) # Create a copy of the original dataset
+            species_str = species[0]  #  species is a list
+            data = ori_dataset.data[species_str]  
+            
+            # Perform conversion
+            converted_data = convert(data, species_str, original_scale, target_scale)
+            st.write("Conversion successful!")
+
+            # Update the dataset with converted data
+            ori_dataset.data[species_str] = converted_data
+            converted_scale_data = ori_dataset
+
+            # Prepare datasets for comparison plotting
+            #datasets_to_plot = [original_scale_data, converted_scale_data]
+            #fig_compare = plot_timeseries(datasets_to_plot)  # Ensure plot_timeseries can handle a list of datasets
+            # Prepare datasets for comparison plotting
+            datasets_to_plot = [
+                {"data": original_scale_data, "label": f"Original - {species_str} - {original_scale}"},
+                {"data": converted_scale_data, "label": f"Converted - {species_str} - {target_scale}"}
+            ]
+
+            fig_compare = go.Figure()
+            for dataset in datasets_to_plot:
+                data_xr = dataset["data"].data  
+                data_df = data_xr.to_dataframe().reset_index()
+                x_data = data_df['time']
+                y_data = data_df[species_str]
+
+                fig_compare.add_trace(go.Scatter(
+                    x=x_data,
+                    y=y_data,
+                    mode='lines',
+                    name=dataset["label"]  # Use diff lable
+                ))
+
+            # Customize the layout
+            fig_compare.update_layout(
+                title="CH4 Concentration Over Time",
+                xaxis_title="Date",
+                yaxis_title="CH4 (nmol/mol)",
+                legend_title="Dataset"
+            )
+            st.plotly_chart(fig_compare)
+            return fig_compare
+        except Exception as e:
+            st.error(f"Conversion failed: {str(e)}")
+            return None
 
 if __name__ == "__main__":
     main()
