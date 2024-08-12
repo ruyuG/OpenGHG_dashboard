@@ -369,42 +369,77 @@ import pandas as pd
 import importlib.resources as pkg_resources
 import openghg_calscales
 
-def load_conversion_scales():
+def load_conversion_scales_bak(species_str):
     # Load the CSV data
 
     file_path = pkg_resources.files(openghg_calscales).joinpath('data/convert_functions.csv')
     data = pd.read_csv(file_path, comment='#')
+    species_data = data[data['species'] == species_str]
     # Extract unique scales from 'scale_x' and 'scale_y' columns
-    scale_x = data['scale_x'].str.split('|').explode().unique()
-    scale_y = data['scale_y'].str.split('|').explode().unique()
+    scale_x = species_data['scale_x'].str.split('|').explode().unique()
+    scale_y = species_data['scale_y'].str.split('|').explode().unique()
     all_scales = set(scale_x) | set(scale_y)  # Create a union of both sets
     return list(all_scales)
 
+def _load_species_data(species_str):
+    """Helper function to load and process species data from CSV."""
+    file_path = pkg_resources.files(openghg_calscales).joinpath('data/convert_functions.csv')
+    data = pd.read_csv(file_path, comment='#')
+    return data[data['species'] == species_str]
+
+def load_conversion_scales(species_str):
+    species_data = _load_species_data(species_str)
+    all_scales = {}
+    for column in ['scale_x', 'scale_y']:
+        for scales in species_data[column]:
+            synonyms = scales.split('|')
+            default = synonyms[0].strip()
+            all_scales[default.lower()] = default
+    return list(all_scales.values())
+
+def get_default_scale_name(scale, species_str):
+    species_data = _load_species_data(species_str)
+    scale_map = {}
+    for column in ['scale_x', 'scale_y']:
+        for scales in species_data[column]:
+            synonyms = scales.split('|')
+            default = synonyms[0].strip()
+            for syn in synonyms:
+                scale_map[syn.strip().lower()] = default
+    return scale_map.get(scale.lower(), scale)
 
 from openghg_calscales import convert
 from copy import deepcopy
 def scale_conversion_section():
     st.subheader("Calibration Scale Conversion")
-    all_scales = load_conversion_scales()  # Load scale options
     if 'search_results' in st.session_state and not st.session_state['search_results'].empty:
-        original_scale = st.session_state['search_results']['calibration_scale'].iloc[0]   
+        species_str = st.session_state['search_results']['species'].iloc[0]
+        original_scale = st.session_state['search_results']['calibration_scale'].iloc[0]
+        original_scale = get_default_scale_name(original_scale, species_str)
         st.write(f"Original calibration scale: {original_scale}")
     else:
         st.warning("No search results available. Please perform a search first.")
-    #original_scale = st.selectbox("Select original calibration scale", options=all_scales, key="original_scale")
-    target_scale = st.selectbox("Select target calibration scale", options=all_scales, key="target_scale")
+        return
+
+    available_scales = load_conversion_scales(species_str)
+    # Remove the original scale from available scales
+    available_scales = [scale for scale in available_scales if scale.lower() != original_scale.lower()]
+    target_scale = st.selectbox("Select target calibration scale", options=available_scales, key="target_scale")
 
     if st.button("Convert Scale"):
         try:
             sites, species, inlets, network, instruments = handle_parameters()
             results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments)
-            ori_dataset = results.retrieve_all()  # Placeholder for actual data retrieval
-            original_scale_data = deepcopy(ori_dataset) # Create a copy of the original dataset
-            species_str = species[0]  #  species is a list
-            data = ori_dataset.data[species_str]  
+            ori_dataset = results.retrieve_all()
+            original_scale_data = deepcopy(ori_dataset)
+            data = ori_dataset.data[species_str]
+            
+            # Get default names for scales
+            original_scale_default = get_default_scale_name(original_scale, species_str)
+            target_scale_default = get_default_scale_name(target_scale, species_str)
             
             # Perform conversion
-            converted_data = convert(data, species_str, original_scale, target_scale)
+            converted_data = convert(data, species_str, original_scale_default, target_scale_default)
             st.write("Conversion successful!")
 
             # Update the dataset with converted data
@@ -414,33 +449,22 @@ def scale_conversion_section():
             # Prepare datasets for comparison plotting
             #datasets_to_plot = [original_scale_data, converted_scale_data]
             #fig_compare = plot_timeseries(datasets_to_plot)  # Ensure plot_timeseries can handle a list of datasets
-            # Prepare datasets for comparison plotting
             datasets_to_plot = [
-                {"data": original_scale_data, "label": f"Original - {species_str} - {original_scale}"},
-                {"data": converted_scale_data, "label": f"Converted - {species_str} - {target_scale}"}
+                {"data": original_scale_data, "label": f"Original - {species_str}{sites}{inlets} - {original_scale_default}"},
+                {"data": converted_scale_data, "label": f"Converted - {species_str}{sites}{inlets} - {target_scale_default}"}
             ]
+            fig_compare = plot_timeseries([dataset["data"] for dataset in datasets_to_plot])
 
-            fig_compare = go.Figure()
-            for dataset in datasets_to_plot:
-                data_xr = dataset["data"].data  
-                data_df = data_xr.to_dataframe().reset_index()
-                x_data = data_df['time']
-                y_data = data_df[species_str]
+            # Add labels to the traces
+            for i, dataset in enumerate(datasets_to_plot):
+                fig_compare.data[i].name = dataset["label"]
 
-                fig_compare.add_trace(go.Scatter(
-                    x=x_data,
-                    y=y_data,
-                    mode='lines',
-                    name=dataset["label"]  # Use diff lable
-                ))
-
-            # Customize the layout
+            # Update layout if necessary
             fig_compare.update_layout(
-                title="CH4 Concentration Over Time",
-                xaxis_title="Date",
-                yaxis_title="CH4 (nmol/mol)",
+                title=f"{species_str}  Over Time",
                 legend_title="Dataset"
             )
+
             st.plotly_chart(fig_compare)
             return fig_compare
         except Exception as e:
