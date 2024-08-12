@@ -2,7 +2,6 @@ import streamlit as st
 from openghg.util import get_domain_info
 import pandas as pd
 from openghg.retrieve import get_footprint, search_footprints, search, search_flux
-#from openghg.plotting import plot_footprint
 from datetime import datetime
 import matplotlib.pyplot as plt 
 from PIL import Image
@@ -10,6 +9,9 @@ import io
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import matplotlib.colors as colors
+from typing import Optional
+from xarray import Dataset
 
 
 def main():
@@ -89,6 +91,7 @@ def search_footprint_data():
 
 
         return filtered_data
+
 def plot_data(filtered_data):
     st.title('Footprint Data Plot')
     if not filtered_data.empty:
@@ -96,27 +99,21 @@ def plot_data(filtered_data):
         
         if selected_indices:
             selected_data = filtered_data.loc[selected_indices]
-            # Need to consider the date, currently showing union, it should be changed to intersection(multiple).
-            #start_date = pd.to_datetime(selected_data['start_date']).min().date()
-            #end_date = pd.to_datetime(selected_data['end_date']).max().date()
-
-            # Intersection
             start_date = pd.to_datetime(selected_data['start_date']).max().date()
             end_date = pd.to_datetime(selected_data['end_date']).min().date()
-            # Should add error message here, report error if there is no intersection
+
             selected_dates = st.date_input(
                 "Select date range:",
                 value=(start_date, end_date),
                 min_value=start_date,
                 max_value=end_date
             )
+            plot_type = st.radio("Choose plot type:", ("Interactive Plotly", "GIF Animation"))
 
-            if st.button('Plot Footprints'):
+            if st.button('Generate Plot'):
                 footprint_data = {}
                 for idx in selected_indices:
                     site_data = filtered_data.loc[idx]
-                    # Using unique keys by combining the site name with the index
-                    # which allows plotting multiple datasets from the same site without data overlap.
                     footprint_data[f"{site_data['site']}_{site_data.get('species')}_{site_data.get('height')}_{idx}"] = get_footprint(
                         site=site_data['site'],
                         domain=site_data['domain'],
@@ -128,8 +125,10 @@ def plot_data(filtered_data):
                         species=site_data.get('species')
                     )
                 
-                plot_footprint_interactive(footprint_data)
-
+                if plot_type == "Interactive Plotly":
+                    plot_footprint_interactive(footprint_data)
+                else:
+                    plot_footprint_gif(footprint_data)
 def plot_footprint_interactive(footprint_data):
     num_datasets = len(footprint_data)
     fig = make_subplots(rows=num_datasets, cols=1,
@@ -181,11 +180,12 @@ def plot_footprint_interactive(footprint_data):
     # Create steps for the slider
     steps = []
     for t, time_value in enumerate(time_values):
+        short_time = pd.to_datetime(time_value).strftime('%Y-%m-%d %H:%M')
         step = dict(
             method="update",
             args=[{"visible": [False] * len(fig.data)},
-                  {"title": f"Time: {time_value}"}],
-            label=str(time_value)
+                  {"title": f"Time: {short_time}"}],
+            label=short_time
         )
         for i in range(num_datasets):
             step["args"][0]["visible"][i * len(time_values) + t] = True
@@ -209,103 +209,62 @@ def plot_footprint_interactive(footprint_data):
        
 
 
-
-
-def plot_data_bak(filtered_data):
-    st.title('Footprint Data Plot')
-    if not filtered_data.empty:
-        selected_index = st.selectbox('Select a dataset to plot:', options=filtered_data.index, key="selected_index_fp")
-        selected_data = filtered_data.loc[selected_index]
-        
-        start_date = pd.to_datetime(selected_data['start_date']).date()
-        end_date = pd.to_datetime(selected_data['end_date']).date()
-
-        selected_dates = st.select_slider(
-            "Select date range:",
-            options=pd.date_range(start_date, end_date).date,
-            value=(start_date, end_date)  
-        )
-    if st.button('Plot Footprint'):
-        #selected_data = filtered_data.loc[selected_index]
-        footprint_data = get_footprint(
-            site=selected_data['site'],
-            domain=selected_data['domain'],
-            inlet=selected_data.get('inlet'),
-            height=selected_data.get('height'),
-            model=selected_data.get('model'),
-            start_date=selected_dates[0].strftime('%Y-%m-%d'),
-            end_date=selected_dates[1].strftime('%Y-%m-%d'),
-            species=selected_data.get('species')
-        )
-        anim = plot_footprint_animation(footprint_data.data)
-        st.image(anim)
+def plot_footprint_gif(footprint_data):
+    num_datasets = len(footprint_data)
+    frames = []
     
-def plot_footprint_gif(data):
-    # modified original plot_footprint
-    frames = []  # Initialize the frames list
-    num_time_points = len(data.fp.time)
+    # Get the total number of time points for progress bar
+    time_values = next(iter(footprint_data.values())).data.time.values
+    total_steps = num_datasets * len(time_values)
+    current_step = 0
     progress_bar = st.progress(0)
 
-    # Determine the number of frames for test
-    #num_time_points = min(len(data.fp.time), 30)
-
-    if num_time_points == 0:
-        st.error("No time points available for animation.")
-        return None
-
-    # Create animation frames
-    for frame in range(num_time_points):
-        fig, ax = plt.subplots()
-        
-        plot_footprint_pyplot(data=data, ax=ax, time_index=frame, label="Concentration")
-
-        ax.set_title(f"Footprint at time {data.fp.time.values[frame]}")
+    for t, time_value in enumerate(time_values):
+        fig, axs = plt.subplots(num_datasets, 1, figsize=(10, 5*num_datasets))
+        if num_datasets == 1:
+            axs = [axs]
+        short_time = pd.to_datetime(time_value).strftime('%Y-%m-%d %H:%M')
+        for i, (site, data_obj) in enumerate(footprint_data.items()):
+            dataset = data_obj.data
+            plot_footprint_pyplot(data=dataset, ax=axs[i], time_index=t, label=f"{site} Footprint")
+            axs[i].set_title(f"{site} at {short_time}")
 
         # Convert Matplotlib figure to PIL Image
         buf = io.BytesIO()
-        fig.savefig(buf, format='png')
+        plt.tight_layout()
+        fig.savefig(buf, format='png', dpi=100)
         buf.seek(0)
         img = Image.open(buf)
         frames.append(img)
         plt.close(fig)
 
-        progress_bar.progress((frame + 1) / num_time_points)  # Update progress
+        current_step += 1
+        progress_percentage = int(100 * current_step / total_steps)
+        progress_bar.progress(progress_percentage)
+
     # Save as GIF
-    gif_path = '/tmp/animation.gif'
-    frames[0].save(gif_path, save_all=True, append_images=frames[1:], duration=100, loop=0)
-    return gif_path
+    gif_path = './data/footprint_animation.gif'
+    frames[0].save(gif_path, save_all=True, append_images=frames[1:], duration=500, loop=0)
+    
+    # Display GIF
+    st.image(gif_path, caption='Footprint Animation')
+    # Provide download link
+    with open(gif_path, "rb") as file:
+        btn = st.download_button(
+            label="Download GIF",
+            data=file,
+            file_name="footprint_animation.gif",
+            mime="image/gif"
+        )
 
-
-
-
-import matplotlib.colors as colors
-import matplotlib.pyplot as plt
-from typing import Optional
-from xarray import Dataset
-
-def plot_footprint_pyplot(
-    data: Dataset, ax, time_index=0, label: Optional[str] = None, vmin: Optional[float] = None, vmax: Optional[float] = None
-) -> None:
-    """Plot a footprint on an existing axis.
-
-    Args:
-        data: Dataset containing fp variable
-        ax: Matplotlib axis to plot on
-        label: Label for colourbar
-        vmin: Minimum value for colours
-        vmax: Maximum value for colours
-    Returns:
-        None
-    """
-    # Plot footprints as a 2D colour map
-    data_fp = data.fp.isel(time=time_index)  # First time point
+def plot_footprint_pyplot(data: Dataset, ax, time_index=0, label: Optional[str] = None, vmin: Optional[float] = None, vmax: Optional[float] = None) -> None:
+    data_fp = data.fp.isel(time=time_index)
     lat = data_fp.lat
     lon = data_fp.lon
     footprint = data_fp.values
 
-    # Apply user-defined color limits
     if vmin is None:
-        vmin = 1e-5  # min is 0 and can't use 0 for a log scale
+        vmin = 1e-5
     if vmax is None:
         vmax = footprint.max()
 
@@ -317,9 +276,10 @@ def plot_footprint_pyplot(
     if label:
         cb.set_label(label)
 
+    ax.set_xlabel('Longitude')
+    ax.set_ylabel('Latitude')
 
 
 
 if __name__ == "__main__":
     main()
-
