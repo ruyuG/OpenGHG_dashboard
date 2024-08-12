@@ -12,6 +12,10 @@ from plotly.subplots import make_subplots
 import matplotlib.colors as colors
 from typing import Optional
 from xarray import Dataset
+# for country line
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as colors
 
 
 def main():
@@ -220,15 +224,18 @@ def plot_footprint_gif(footprint_data):
     progress_bar = st.progress(0)
 
     for t, time_value in enumerate(time_values):
-        fig, axs = plt.subplots(num_datasets, 1, figsize=(10, 5*num_datasets))
-        if num_datasets == 1:
-            axs = [axs]
+        fig = plt.figure(figsize=(10, 5 * num_datasets))
         short_time = pd.to_datetime(time_value).strftime('%Y-%m-%d %H:%M')
         for i, (site, data_obj) in enumerate(footprint_data.items()):
+            #  Make sure that each subplot (ax) is correctly created using Cartopy projection before calling plot_footprint_pyplot, then add_feature method is supported.
+            ax = fig.add_subplot(num_datasets, 1, i + 1, projection=ccrs.PlateCarree())
             dataset = data_obj.data
-            plot_footprint_pyplot(data=dataset, ax=axs[i], time_index=t, label=f"{site} Footprint")
-            axs[i].set_title(f"{site} at {short_time}")
+            plot_footprint_pyplot(data=dataset, ax=ax, time_index=t, label=f"{site} Footprint")
+            ax.set_title(f"{site} at {short_time}")
 
+            current_step += 1
+            progress_percentage = int(100 * current_step / total_steps)
+            progress_bar.progress(progress_percentage)
         # Convert Matplotlib figure to PIL Image
         buf = io.BytesIO()
         plt.tight_layout()
@@ -237,10 +244,6 @@ def plot_footprint_gif(footprint_data):
         img = Image.open(buf)
         frames.append(img)
         plt.close(fig)
-
-        current_step += 1
-        progress_percentage = int(100 * current_step / total_steps)
-        progress_bar.progress(progress_percentage)
 
     # Save as GIF
     gif_path = './data/footprint_animation.gif'
@@ -258,6 +261,8 @@ def plot_footprint_gif(footprint_data):
         )
 
 def plot_footprint_pyplot(data: Dataset, ax, time_index=0, label: Optional[str] = None, vmin: Optional[float] = None, vmax: Optional[float] = None) -> None:
+    ax.add_feature(cfeature.BORDERS, linestyle='-', linewidth=1, edgecolor='grey')  # Add country line
+
     data_fp = data.fp.isel(time=time_index)
     lat = data_fp.lat
     lon = data_fp.lon
@@ -269,7 +274,7 @@ def plot_footprint_pyplot(data: Dataset, ax, time_index=0, label: Optional[str] 
         vmax = footprint.max()
 
     im = ax.pcolormesh(
-        lon, lat, footprint, norm=colors.LogNorm(vmin=vmin, vmax=vmax), shading="auto"
+        lon, lat, footprint, norm=colors.LogNorm(vmin=vmin, vmax=vmax), shading="auto",  transform=ccrs.PlateCarree()
     )
     cb = plt.colorbar(im, ax=ax)
 
@@ -278,7 +283,9 @@ def plot_footprint_pyplot(data: Dataset, ax, time_index=0, label: Optional[str] 
 
     ax.set_xlabel('Longitude')
     ax.set_ylabel('Latitude')
-
+    ax.set_extent([lon.min(), lon.max(), lat.min(), lat.max()], crs=ccrs.PlateCarree())
+    ax.coastlines('50m', linewidth=0.8, edgecolor='grey')
+    ax.gridlines(draw_labels=True, dms=True, x_inline=False, y_inline=False, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
 
 
 if __name__ == "__main__":
