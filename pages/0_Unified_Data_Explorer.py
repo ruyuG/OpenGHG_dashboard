@@ -178,7 +178,7 @@ def display_table():
         if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
             st.dataframe(st.session_state['observation_results'])
 
-def calculate_rolling_average(data, window=300):
+def calculate_rolling_average(data, window=30):
     st.write(f"Window size: {window}")
     print("Sample before rolling average:", data.head())
     result = data.rolling(window=window, min_periods=1).mean()
@@ -334,7 +334,7 @@ def plot_observation_data():
 
                 updated_datasets = results.retrieve_all()
                 if not isinstance(updated_datasets, list):
-                        updated_datasets = [updated_datasets]                
+                    updated_datasets = [updated_datasets]                
 
                 if show_rolling_average:
                     fig = create_rolling_average_plot(updated_datasets)
