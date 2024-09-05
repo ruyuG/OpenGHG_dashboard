@@ -13,6 +13,7 @@ from openghg.util import get_species_info, synonyms, get_datapath, load_internal
 from openghg.plotting._timeseries import _plot_legend_position, _plot_logo, _plot_remove_gaps, _latex2html
 from openghg.util._species import get_species_info
 from scipy import stats
+import numpy as np
 #@st.cache_data(show_spinner=False)
 def overview():
     st.title('Overview')
@@ -205,14 +206,9 @@ def add_linear_regression(fig, datasets):
             x=x_data,
             y=line,
             mode='lines',
-            name=f'Linear Regression - {species_name} - {site.upper()} ({inlet})',
-            line=dict(color='red', dash='dash'),
+            name=f'Linear Regression - {species_name} - {site.upper()} ({inlet}) <br>R-squared: {r_value**2:.2f}, Slope: {slope:.2e}',
+            line=dict(dash='dash'),
         ))
-        
-        # Updating plot title to include regression info
-        current_title = fig.layout.title.text if fig.layout.title else "Plot"
-        new_title = f"{current_title}<br>R-squared: {r_value**2:.4f}, Slope: {slope:.4e}"
-        fig.update_layout(title=new_title)
 
     return fig
 
@@ -446,6 +442,15 @@ def scale_conversion_section():
             ori_dataset.data[species_str] = converted_data
             converted_scale_data = ori_dataset
 
+            # Calculate and display statistics
+            original_mean = np.mean(data.compute())  # Use compute() to convert Dask array to NumPy
+            original_std = np.std(data.compute())
+            converted_mean = np.mean(converted_data.compute())
+            converted_std = np.std(converted_data.compute())
+
+            st.write(f"**{original_scale_default}:** Mean = {original_mean:.2f}, Std Dev = {original_std:.2f}")
+            st.write(f"**{target_scale_default}:** Mean = {converted_mean:.2f}, Std Dev = {converted_std:.2f}")
+
             # Prepare datasets for comparison plotting
             #datasets_to_plot = [original_scale_data, converted_scale_data]
             #fig_compare = plot_timeseries(datasets_to_plot)  # Ensure plot_timeseries can handle a list of datasets
@@ -473,4 +478,3 @@ def scale_conversion_section():
 
 if __name__ == "__main__":
     main()
-

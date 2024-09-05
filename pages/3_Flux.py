@@ -1,7 +1,7 @@
 import streamlit as st
 from openghg.util import get_domain_info
 import pandas as pd
-from openghg.retrieve import get_flux, search, search_flux
+from openghg.retrieve import get_flux, search_flux
 from datetime import datetime
 import matplotlib.pyplot as plt 
 from PIL import Image
@@ -122,7 +122,7 @@ def plot_flux_interactive(flux_data, selected_years):
         for t, time_value in enumerate(time_values):
             flux = dataset.flux.sel(time=time_value).values
             #z = np.log10(flux + 1e-5)
-            z = np.log10(flux + 1e-15)
+            z = np.log10(flux + 1e-12)
             #z = flux
             zmin = np.min(z[np.isfinite(z)])
             zmax = np.max(z)
@@ -137,7 +137,7 @@ def plot_flux_interactive(flux_data, selected_years):
                 zmax=zmax,
                 colorbar=dict(title="Log(Flux)", x=1.02, len=0.9, thickness=20, yanchor="top", y=1, ticks="outside"),
                 #colorbar=dict(title="Flux",x=1.02,len=0.9,thickness=20,yanchor="top",y=1,ticks="outside",tickformat=".2e"),
-                showscale=(t == 0),
+                showscale=True,
                 visible=(t == 0)
             )
             fig.add_trace(trace, row=i + 1, col=1)

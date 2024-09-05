@@ -112,9 +112,9 @@ def main():
         st.write('Model Scenario Created.')
         scenario = st.session_state['scenario']
         modelled_observations = scenario.calc_modelled_obs()
-        fig, ax = plt.subplots()
-        modelled_observations.plot(ax=ax)
-        st.pyplot(fig)
+        #fig, ax = plt.subplots()
+        #modelled_observations.plot(ax=ax)
+        #st.pyplot(fig)
 
         st.write('Comparing Modelled and Observed Data:')
         comparison_fig = scenario.plot_comparison()

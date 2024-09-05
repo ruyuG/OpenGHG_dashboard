@@ -1,14 +1,12 @@
 import streamlit as st
 from openghg.retrieve import search_surface
-from openghg.standardise import summary_source_formats
-from openghg.util import get_domain_info
 import pandas as pd
 from openghg.plotting import plot_timeseries
-from pandas import to_datetime
+from pandas import to_datetime 
+from datetime import datetime, timedelta
 import xarray as xr
 from openghg.retrieve import get_footprint, search_footprints, search, search_flux
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import numpy as np
 import json
 import plotly.express as px
@@ -22,16 +20,10 @@ from openghg.util import get_species_info, synonyms, get_datapath, load_internal
 from openghg.plotting._timeseries import _plot_legend_position, _plot_logo, _plot_remove_gaps, _latex2html
 from openghg.util._species import get_species_info
 from scipy import stats
-@st.cache_data(show_spinner=False)
-def overview():
-    st.title('Overview')
-    #summary = summary_source_formats()
-    summary = search_surface()
-    st.dataframe(summary.results,height=250)
+
 
 def main():
     st.title("OpenGHG Data Explorer")
-    overview()
     # Initialize session state
     initialize_session_state()
     
@@ -43,12 +35,11 @@ def main():
         display_table()
         plot_observation_data()
 
-        # Use observation parameters to search footprint data
-        footprint_data = search_footprint_data()
-
+        footprint_datasets = search_footprint_data()
         # Plot footprint data if available
-        if footprint_data is not None and not footprint_data.empty:
-            plot_footprint_data(footprint_data)
+        if footprint_datasets is not None and not footprint_datasets.empty:
+            plot_footprint_data(footprint_datasets)
+
 
 def initialize_session_state():
     keys = ['site', 'species', 'inlet', 'network', 'instrument', 'compound_group', 'observation_results', 'observation_fig']
@@ -178,7 +169,7 @@ def display_table():
         if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
             st.dataframe(st.session_state['observation_results'])
 
-def calculate_rolling_average(data, window=30):
+def calculate_rolling_average(data, window=365):
     st.write(f"Window size: {window}")
     print("Sample before rolling average:", data.head())
     result = data.rolling(window=window, min_periods=1).mean()
@@ -321,7 +312,7 @@ def plot_observation_data():
             default_end = selected_max_date.to_pydatetime() if selected_max_date else pd.Timestamp.now()
 
             date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
-
+            st.session_state['observation_time_range'] = date_range
             # create an empty container 
             plot_container = st.empty()
             if st.button("Plot Observation Data", key="plot_observation_data"):
@@ -334,7 +325,7 @@ def plot_observation_data():
 
                 updated_datasets = results.retrieve_all()
                 if not isinstance(updated_datasets, list):
-                    updated_datasets = [updated_datasets]                
+                        updated_datasets = [updated_datasets]                
 
                 if show_rolling_average:
                     fig = create_rolling_average_plot(updated_datasets)
@@ -349,139 +340,10 @@ def plot_observation_data():
                     st.warning("Unable to create a valid plot. Please check your data.")
             elif 'observation_fig' in st.session_state and isinstance(st.session_state['observation_fig'], go.Figure):
                 plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
-def plot_observation_data_back():
-    with st.container():
-        show_rolling_average = st.checkbox("Show Rolling Average", value=False)
-        show_linear_regression = st.checkbox("Show Linear Regression", value=False)
-        if 'observation_results' in st.session_state and st.session_state['observation_results'] is not None:
-            min_dates = pd.to_datetime(st.session_state['observation_results']['start_date'])
-            max_dates = pd.to_datetime(st.session_state['observation_results']['end_date'])
 
-            if len(st.session_state['observation_results']) > 1:
-                date_range_option = st.radio("Select date range option", ["Intersection", "Union"], key="date_range_option")
-                if date_range_option == "Intersection":
-                    selected_min_date = max(min_dates)
-                    selected_max_date = min(max_dates)
-                else:
-                    selected_min_date = min(min_dates)
-                    selected_max_date = max(max_dates)
-            else:
-                selected_min_date = min_dates.iloc[0]
-                selected_max_date = max_dates.iloc[0]
-
-            default_start = selected_min_date.to_pydatetime() if selected_min_date else pd.Timestamp.now() - pd.Timedelta(days=365)
-            default_end = selected_max_date.to_pydatetime() if selected_max_date else pd.Timestamp.now()
-
-            date_range = st.slider("Select date range for all datasets", min_value=default_start, max_value=default_end, value=(default_start, default_end), key="date_range_all")
-
-            # create an empty container 
-            plot_container = st.empty()
-            if st.button("Plot Observation Data", key="plot_observation_data"):
-                sites, species, inlets, network, instruments = handle_parameters()
-                results = search_surface(site=sites, species=species, inlet=inlets, network=network, instrument=instruments,
-                                         start_date=date_range[0].strftime('%Y-%m-%d'), end_date=date_range[1].strftime('%Y-%m-%d'))
-
-                if hasattr(results, 'results') and not results.results.empty:
-                    updated_datasets = results.retrieve_all()
-
-                    if not isinstance(updated_datasets, list):
-                        updated_datasets = [updated_datasets]
-                             
-                if show_rolling_average:
-                    fig = go.Figure()
-                    species_info = get_species_info()
-                    attributes_data = load_internal_json("attributes.json")
-                    
-                    species_strings = []
-                    unit_strings = []
-                    for dataset in updated_datasets:
-                        metadata = dataset.metadata
-                        species_name = metadata["species"]
-                        site = metadata["site"]
-                        inlet = metadata["inlet"]
-                        
-                        species_string = _latex2html(species_info[synonyms(species_name, lower=False)]["print_string"])
-                        legend_text = f"Rolling Avg - {species_string} - {site.upper()} ({inlet})"
-
-                        data_xr = dataset.data
-                        data_df = data_xr.to_dataframe().reset_index()
-                        
-                        x_data = data_df['time']
-                        y_data = data_df[species_name] #df
-                        
-                        #data_units = y_data.attrs.get("units", "1")
-                        data_units = data_xr[species_name].attrs.get("units", "1")
-                        unit_value = data_units
-                        unit_conversion = 1
-                        
-                        y_data *= unit_conversion
-                        rolling_data = calculate_rolling_average(y_data)
-
-                        unit_string = attributes_data["unit_print"][unit_value]
-                        unit_string_html = _latex2html(unit_string)
-
-                        x_data_plot, y_data_plot = _plot_remove_gaps(x_data.values, rolling_data.values)
-
-                        fig.add_trace(go.Scatter(
-                            name=legend_text,
-                            x=x_data_plot,
-                            y=y_data_plot,
-                            mode="lines",
-                            #line=dict(color='red', width=2),
-                            hovertemplate="%{x|%Y-%m-%d %H:%M}<br> %{y:.1f} " + unit_string_html,
-                        ))
-
-                        unit_strings.append(unit_string_html)
-                        species_strings.append(species_string)
-
-                    # Determine whether data is ascending or descending
-                    y_data_diff = y_data.diff().mean()
-                    ascending = y_data_diff >= 0
-
-                    # Update y-axis title
-                    ytitle = ", ".join(set(species_strings)) + " (" + unit_strings[0] + ")"
-                    fig.update_yaxes(title=ytitle)
-
-                    # Update x-axis title
-                    fig.update_xaxes(title="Date")
-
-                    # Position the legend
-                    legend_pos, logo_pos = _plot_legend_position(ascending)
-                    fig.update_layout(
-                        legend=legend_pos, 
-                        template="seaborn",
-                        title={
-                            "text": "Rolling Average of Observation Data",
-                            "y": 0.9,
-                            "x": 0.5,
-                            "xanchor": "center",
-                            "yanchor": "top"
-                        },
-                        font={"size": 14},
-                        margin={"l": 20, "r": 20, "t": 20, "b": 20}
-                    )
-
-                    # Add OpenGHG logo
-                    logo_dict = _plot_logo(logo_pos)
-                    fig.add_layout_image(logo_dict)
-                else:
-                    fig = plot_timeseries(updated_datasets, xvar='time')
-                if show_linear_regression and isinstance(fig, go.Figure):
-                    fig = add_linear_regression(fig, updated_datasets)
-                if isinstance(fig, go.Figure):
-                    st.session_state['observation_fig'] = fig
-                    plot_container.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.warning("Unable to create a valid plot. Please check your data.")
-                """
-                st.session_state['observation_fig'] = fig
-                plot_container.plotly_chart(fig, use_container_width=True)
-                """
-            elif 'observation_fig' in st.session_state and isinstance(st.session_state['observation_fig'], go.Figure):
-                plot_container.plotly_chart(st.session_state['observation_fig'], use_container_width=True)
 
 def search_footprint_data():
-    st.header("Footprint Data Search")
+    #st.header("Footprint Data")
     
     if st.session_state['observation_results'] is None:
         st.warning("Please search for observation data first.")
@@ -518,119 +380,73 @@ def search_footprint_data():
         return None
     st.dataframe(filtered_data)
     return filtered_data
-
 def plot_footprint_data(filtered_data):
-    st.header("Footprint Data Plot")
-    
     if not filtered_data.empty:
-        selected_indices = st.multiselect('Select datasets to plot:', options=filtered_data.index, key="selected_indices_fp")
-        
-        if selected_indices:
-            selected_data = filtered_data.loc[selected_indices]
-            start_date = pd.to_datetime(selected_data['start_date']).max().date()
-            end_date = pd.to_datetime(selected_data['end_date']).min().date()
-            
-            selected_dates = st.date_input(
-                "Select date range:",
-                value=(start_date, end_date),
-                min_value=start_date,
-                max_value=end_date
-            )
-
-            if st.button('Plot Footprints'):
-                footprint_data = {}
-                for idx in selected_indices:
-                    site_data = filtered_data.loc[idx]
-                    footprint_data[f"{site_data['site']}_{site_data.get('species')}_{site_data.get('height')}_{idx}"] = get_footprint(
-                        site=site_data['site'],
-                        domain=site_data['domain'],
-                        inlet=site_data.get('inlet'),
-                        height=site_data.get('height'),
-                        model=site_data.get('model'),
-                        start_date=selected_dates[0].strftime('%Y-%m-%d'),
-                        end_date=selected_dates[1].strftime('%Y-%m-%d'),
-                        species=site_data.get('species')
+        # intersection
+        observed_min_date, observed_max_date = st.session_state['observation_time_range']
+        footprint_min_date = pd.to_datetime(filtered_data['start_date']).min()
+        footprint_max_date = pd.to_datetime(filtered_data['end_date']).max()
+        start_date = max(observed_min_date, footprint_min_date)
+        end_date = min(observed_max_date, footprint_max_date)
+        print(f"start_date: {start_date}, type: {type(start_date)}")
+        print(f"end_date: {end_date}, type: {type(end_date)}")
+        #print(f"Sample time point: {time_points[0]}, type: {type(time_points[0])}")
+        if start_date > end_date:
+            st.warning("No overlapping dates between observation and footprint data.")
+            return
+        site_fp = filtered_data['site'].iloc[0]  # Adjusted for single value
+        domain_fp = filtered_data['domain'].iloc[0]
+        inlet_fp = filtered_data.get('inlet').iloc[0]
+        height_fp = filtered_data.get('height').iloc[0]
+        model_fp = filtered_data.get('model').iloc[0]
+        species_fp = filtered_data.get('species').iloc[0]  # Ensure this is a single string
+        footprint_data = get_footprint(
+                        site=site_fp,
+                        domain=domain_fp ,
+                        inlet=inlet_fp,
+                        height=height_fp,
+                        model=model_fp,
+                        start_date=start_date.strftime('%Y-%m-%d'),
+                        end_date=end_date.strftime('%Y-%m-%d'),
+                        species=species_fp
                     )
-                
-                plot_footprint_interactive(footprint_data)
+        # Extract the list of time points from filtered_data
+        time_points = pd.to_datetime(footprint_data.data['time']).sort_values().unique()
+        # Ensure time points are within intersection range
+        #valid_time_points = [time for time in time_points if start_date <= time <= end_date]
+        
+        #if not valid_time_points:
+        #    st.warning("No valid time points within the selected date range.")
+        #    return
 
-def plot_footprint_interactive(footprint_data):
-    num_datasets = len(footprint_data)
-    fig = make_subplots(rows=num_datasets, cols=1,
-                        subplot_titles=list(footprint_data.keys()),
-                        shared_xaxes=True, vertical_spacing=0.1)
-
-    # Get the total number of time points for progress bar
-    time_values = next(iter(footprint_data.values())).data.time.values
-    total_steps = num_datasets * len(time_values)
-    current_step = 0
-    progress_bar = st.progress(0)
-
-    for i, (site, data_obj) in enumerate(footprint_data.items()):
-        dataset = data_obj.data
-        lat = dataset.lat.values
-        lon = dataset.lon.values
-
-        lon_grid, lat_grid = np.meshgrid(lon, lat)
-
-        lat_bounds = [np.min(lat), np.max(lat)]
-        lon_bounds = [np.min(lon), np.max(lon)]
-
-        for t, time_value in enumerate(time_values):
-            footprint = dataset.fp.isel(time=t).values
-            z = np.log10(footprint + 1e-5)
-            zmin = np.min(z[np.isfinite(z)])
-            zmax = np.max(z)
-
-            trace = go.Heatmap(
-                x=lon_grid[0],
-                y=lat_grid[:, 0],
-                z=z,
-                colorscale='Viridis',
-                zmin=zmin,
-                zmax=zmax,
-                colorbar=dict(title="Log(Footprint)", x=1.02,len=0.9,thickness=20,yanchor="top", y=1,ticks="outside"),
-                showscale=(t == 0),
-                visible=(t == 0)  # only for the first time point
-            )
-            fig.add_trace(trace, row=i + 1, col=1)
-
-            current_step += 1
-            progress_percentage = int(100 * current_step / total_steps)
-            progress_bar.progress(progress_percentage)
-
-        fig.update_xaxes(range=lon_bounds, row=i+1, col=1)
-        fig.update_yaxes(range=lat_bounds, row=i+1, col=1)
-
-    # Create steps for the slider
-    steps = []
-    for t, time_value in enumerate(time_values):
-        step = dict(
-            method="update",
-            args=[{"visible": [False] * len(fig.data)},
-                  {"title": f"Time: {time_value}"}],
-            label=str(time_value)
+        # User selects a specific point in time
+        selected_time = st.select_slider(
+            "Select a specific time point for footprint data",
+            options=time_points,
+            format_func=lambda x: x.strftime('%Y-%m-%d %H:%M')
         )
-        for i in range(num_datasets):
-            step["args"][0]["visible"][i * len(time_values) + t] = True
-        steps.append(step)
+        print(f'selected_time is ==== {selected_time}')
+        # get footprint data
+        if st.button('Fetch and Plot Footprint Data'):
+            
+            selected_data = footprint_data.data.sel(time=selected_time, method='nearest')
+            plot_selected_footprint(selected_data)
 
-    sliders = [dict(
-        active=0,
-        currentvalue={"prefix": "Time: "},
-        steps=steps,
-        pad={"t": 50}
-    )]
-    
-    fig.update_layout(
-        sliders=sliders,
-        height=400*num_datasets,
-        title_text="Footprint Comparison",
-        margin=dict(r=80, t=100, b=50), # for colorbar
-    )
 
-    st.plotly_chart(fig, use_container_width=True)
-       
+def plot_selected_footprint(footprint_data):
+    # Function to plot the selected footprint
+    if footprint_data:
+        fig = go.Figure(data=go.Heatmap(
+            z=np.log10(footprint_data.fp.values + 1e-5),
+            x=footprint_data.lon,
+            y=footprint_data.lat,
+            colorscale='Viridis'
+        ))
+        fig.update_layout(title=f"Footprint ", xaxis_title='Longitude', yaxis_title='Latitude')
+        st.plotly_chart(fig, use_container_width=True)
+
+
+
+  
 if __name__ == "__main__":
     main()
-
