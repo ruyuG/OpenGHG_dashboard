@@ -29,6 +29,11 @@ This setup is specifically tailored for deployment on the BluePebble server. Fol
    This script automates the setup process, including environment creation and dependency installation.
 
 ## Usage
+On BluePebble
+```
+source $HOME/streamlit-env/bin/activate
+cd $HOME/openghg_interface
+```
 
 To launch the interface after installation:
 ```bash
