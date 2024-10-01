@@ -51,4 +51,25 @@ Contributions to improve or extend the platform's functionalities are welcome. P
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
+## Python Module Update
 
+Due to an upgrade, the Python loading for BP has changed from:
+
+```
+module load lang/python/miniconda/3.10.10.cuda-12
+```
+
+to:
+
+```
+module load languages/python/3.12.3
+```
+
+The scripts in this repository have been updated accordingly.
+
+
+### Code Update Repository
+The installation script for the new version now includes port forwarding and has simplified the start and stop steps. 
+To avoid any impact on thesis grading, the updated code can be found in the new repository:
+[OpenGHG-interface](https://github.com/ruyuG/OpenGHG-interface)
+``` 
